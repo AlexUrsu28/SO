@@ -24,7 +24,7 @@ done
 
 if test -f "$file" 
 then
-    echo "Fișier obișnuit!"
+    echo "Regular file!"
 fi
 
 echo "Number of arguments greater than 10: $count"
@@ -33,11 +33,3 @@ echo $sum | wc -c
 
 echo "Number of arguments greater than 10: $count, sum of arguments: $sum" > $file
 
-for file in $dir1
-do
-    if test -f $file && test -grep -q "*.txt" $file
-    then
-        echo "File $file exists and contains only digits"
-    fi 
-
-done
