@@ -1,0 +1,5 @@
+Numar litere mici 15 
+Numar litere mari 1 
+Numar cifre 2 
+Numar aparitii 2 
+Dimensiune fisier 26 
