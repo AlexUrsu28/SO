@@ -8,10 +8,14 @@
 #include <stdint.h>
 #include <time.h>
 #include <dirent.h>
+#include <sys/wait.h>
+
 #define MAX 4096
 char buffer[MAX];
 char out[MAX];
-
+int count_process = 0;
+int pfd[2];
+char *path_out;
 typedef struct
 {
     uint16_t signature;  // 2B
@@ -92,7 +96,7 @@ void extractData(int fd, const char *nume_fisier)
     }
     else
     {
-        printf("Eroare la obtinerea informatiilor despre fisier");
+        perror("Eroare la obtinerea informatiilor despre fisier");
     }
 }
 
@@ -154,6 +158,67 @@ void extractDrepturi(mode_t mode, int fd)
     write(fd, "\n", strlen("\n"));
 }
 
+void countLines(char *array)
+{
+    for (int i = 0; i < strlen(array); i++)
+    {
+        if (array[i] == ' ')
+        {
+            array[i] = '\0';
+            break;
+        }
+    }
+    printf("Numarul de linii in fisier este: %s\n", array);
+}
+
+/*int createFileinDir(char *name_file)
+{
+    char aux[MAX] = {0};
+    strcpy(aux, path_out);
+    printf("\n\nname = %s\n\n", name_file);
+    printf("\n\naux = %s\n\n", aux);
+    strcat(aux, name_file);
+    strcat(aux, "\0");
+    printf("\n\naux = %s\n\n", aux);
+    int fd = open(aux, O_WRONLY | O_CREAT, S_IRUSR | S_IRGRP | S_IROTH);
+    if (fd == -1)
+    {
+        perror("Fisierul nu exista\n");
+        return 0;
+    }
+    return fd;
+}?*/
+
+char *concatFormat(char *name_file)
+{
+    char aux[MAX] = {0};
+    strcat(aux, name_file);
+    strcat(aux, "_statistica.txt");
+    strcat(aux, "\0");
+    char *aux2 = aux;
+    return aux2;
+}
+
+void waitPID(int count_process)
+{
+    for (int i = 0; i < count_process; i++)
+    {
+        int status;
+        int w;
+        w = wait(&status);
+        if (w == -1)
+        {
+            perror(" Eroare la waitpid");
+            exit(EXIT_FAILURE);
+        }
+
+        if (WIFEXITED(status))
+        {
+            printf("The process with PID %d has ended with the exit code %d\n", w, WEXITSTATUS(status));
+        }
+    }
+}
+
 int main(int args, char *argv[])
 {
     DIR *dir;
@@ -161,15 +226,22 @@ int main(int args, char *argv[])
     dir = opendir(path);
     if (dir == NULL)
     {
-        printf(out, "Nu exista directorul\n");
+        perror("Nu exista directorul\n");
         return 0;
     }
-    //aici trebuie inchis la fiecare compilare fisietul ststistica deoarece trebuie creat mai intai
+    DIR *dir_out;
+    path_out = argv[2];
+    dir_out = opendir(path_out);
+    if (dir_out == NULL)
+    {
+        perror("Nu exista directorul\n");
+        return 0;
+    }
+    // aici trebuie inchis la fiecare compilare fisietul ststistica deoarece trebuie creat mai intai
     int file2 = open("statistica.txt", O_WRONLY | O_CREAT, S_IRUSR | S_IRGRP | S_IROTH);
     if (file2 == -1)
     {
-        sprintf(out, "Fisierul nu exista\n");
-        write(file2, out, strlen(out));
+        perror("Fisierul nu exista\n");
         return 0;
     }
     entry = readdir(dir);
@@ -185,34 +257,111 @@ int main(int args, char *argv[])
             int file_desc = open(file_path, O_RDONLY);
             if (file_desc == -1)
             {
-                printf(out, "Fisierul nu exista\n");
+                perror("Fisierul nu exista\n");
+                return 0;
             }
             int nr1 = read(file_desc, buffer, MAX);
             if (nr1 == -1)
             {
-                printf("Eroare la citire\n");
+                perror("Eroare la citire\n");
+                return 0;
             }
             memcpy(&header.signature, buffer, 2);
             if (header.signature == 0x4D42)
             {
-                sprintf(out, "Fișierul %s este de tip BMP.\n", entry->d_name);
-                write(file2, out, strlen(out));
-                extractData(file2, file_path);
-                extractHeader(file2);
-                if (stat(file_path, &st) == 0)
+                if (pipe(pfd) < 0)
                 {
-                    extractDrepturi(st.st_mode, file2);
+                    perror("Eroare la pipe\n");
+                    return 0;
                 }
+                pid_t pid = fork();
+                if (pid == -1)
+                {
+                    perror("Eroare la fork\n");
+                    return 0;
+                }
+                count_process++;
+                if (pid == 0)
+                {
+                    // copil
+                    close(pfd[0]); // inchid capat de citire
+                    char *file_name = concatFormat(entry->d_name);
+                    char aux[MAX] = {0};
+                    strcpy(aux, path_out);
+                    strcat(aux, file_name);
+                    strcat(aux, "\0");
+                    int fd = open(aux, O_WRONLY | O_CREAT, S_IRUSR | S_IRGRP | S_IROTH);
+                    if (fd == -1)
+                    {
+                        perror("Fisierul nu exista\n");
+                        return 0;
+                    }
+                    extractData(fd, file_path);
+                    extractHeader(fd);
+                    if (stat(file_path, &st) == 0)
+                    {
+                        extractDrepturi(st.st_mode, fd);
+                    }
+                    // Redirecționează ieșirea standard către pipe
+                    dup2(pfd[1], 1);
+                    execlp("wc", "wc", "-l", aux , NULL);
+                }
+                // parinte
+                close(pfd[1]); // inchid capat de scriere
+                char array[MAX];
+                read(pfd[0], array, MAX);
+                printf("Numarul de linii in fisier este: %s\n", array);
+                countLines(array);
+                sprintf(out,"Numărul de linii în fișier: %s\n", array);
+                write(file2, out, strlen(out));
+                close(pfd[0]);
             }
             else
             {
-                sprintf(out, "Numele fisierului obisnuit: %s\n", entry->d_name);
-                write(file2, out, strlen(out));
-                extractData(file2, file_path);
-                if (stat(file_path, &st) == 0)
+                if (pipe(pfd) < 0)
                 {
-                    extractDrepturi(st.st_mode, file2);
+                    perror("Eroare la pipe\n");
+                    return 0;
                 }
+                pid_t pid = fork();
+                if (pid == -1)
+                {
+                    perror("Eroare la fork\n");
+                    return 0;
+                }
+                count_process++;
+                if (pid == 0)
+                {
+                    // copil
+                    close(pfd[0]); // inchid capat de citire
+                    char *file_name = concatFormat(entry->d_name);
+                    char aux[MAX] = {0};
+                    strcpy(aux, path_out);
+                    strcat(aux, file_name);
+                    strcat(aux, "\0");
+                    int fd = open(aux, O_WRONLY | O_CREAT, S_IRUSR | S_IRGRP | S_IROTH);
+                    if (fd == -1)
+                    {
+                        perror("Fisierul nu exista\n");
+                        return 0;
+                    }
+                    extractData(fd, file_path);
+                    if (stat(file_path, &st) == 0)
+                    {
+                        extractDrepturi(st.st_mode, fd);
+                    }
+                    // Redirecționează ieșirea standard către pipe
+                    dup2(pfd[1], 1);
+                    execlp("wc", "wc", "-l", aux , NULL);
+                }
+                // parinte
+                close(pfd[1]); // inchid capat de scriere
+                char array[MAX] ={0};
+                read(pfd[0], array, MAX);
+                countLines(array);
+                sprintf(out,"Numărul de linii în fișier: %s\n", array);
+                write(file2, out, strlen(out));
+                close(pfd[0]);
             }
         }
         else if (afiseaza_tipul(file_path) == 2)
@@ -229,27 +378,74 @@ int main(int args, char *argv[])
         }
         else if (afiseaza_tipul(file_path) == 3)
         {
-            sprintf(out, "Numele legaturii este: %s\n", entry->d_name);
-            write(file2, out, strlen(out));
-            extractDataSymLink(file2, file_path);
-            if (lstat(file_path, &st) == 0)
+            int file_desc = open(file_path, O_RDONLY);
+            if (file_desc == -1)
             {
-                extractDrepturi(st.st_mode, file2);
+                perror("Fisierul nu exista\n");
+                return 0;
             }
+            int nr1 = read(file_desc, buffer, MAX);
+            if (nr1 == -1)
+            {
+                perror("Eroare la citire\n");
+                return 0;
+            }
+            if (pipe(pfd) < 0)
+                {
+                    perror("Eroare la pipe\n");
+                    return 0;
+                }
+                pid_t pid = fork();
+                if (pid == -1)
+                {
+                    perror("Eroare la fork\n");
+                    return 0;
+                }
+                count_process++;
+                if (pid == 0)
+                {
+                    // copil
+                    close(pfd[0]); // inchid capat de citire
+                    char *file_name = concatFormat(entry->d_name);
+                    char aux[MAX] = {0};
+                    strcpy(aux, path_out);
+                    strcat(aux, file_name);
+                    strcat(aux, "\0");
+                    int fd = open(aux, O_WRONLY | O_CREAT, S_IRUSR | S_IRGRP | S_IROTH);
+                    if (fd == -1)
+                    {
+                        perror("Fisierul nu exista\n");
+                        return 0;
+                    }
+                    sprintf(out, "Numele legaturii este: %s\n", entry->d_name);
+                    write(fd, out, strlen(out));
+                    extractDataSymLink(fd, file_path);
+                    if (lstat(file_path, &st) == 0)
+                    {
+                        extractDrepturi(st.st_mode, fd);
+                    }
+                }
+                // parinte
+                close(pfd[1]); // inchid capat de scriere
+                char array[MAX] ={0};
+                read(pfd[0], array, MAX);
+                countLines(array);
+                sprintf(out,"Numărul de linii în fișier: %s\n", array);
+                write(file2, out, strlen(out));
+                close(pfd[0]);
         }
         entry = readdir(dir);
     }
-    if (close(file2) == -1)
+    if (closedir(dir_out) == -1)
     {
-        sprintf(out, "Fisierul nu a fost inchis\n");
-        write(file2, out, strlen(out));
+        perror("Directorul out nu a fost inchis\n");
         return 0;
     }
-    if(closedir(dir)==-1)
+    if (closedir(dir) == -1)
     {
-        sprintf(out, "Directorul nu a fost inchis\n");
-        write(file2, out, strlen(out));
+        perror("Directorul input nu a fost inchis\n");
         return 0;
     }
+    waitPID(count_process);
     return 0;
 }
