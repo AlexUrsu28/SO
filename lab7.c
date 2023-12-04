@@ -9,8 +9,11 @@
 #include <time.h>
 #include <dirent.h>
 #include <sys/wait.h>
+#include <regex.h>
 
+//#define REGEX_PATTERN "^[A-Z][A-Za-z0-9\, ]*\.$"
 #define MAX 4096
+
 char buffer[MAX];
 char out[MAX];
 int count_process = 0;
@@ -34,6 +37,15 @@ struct timespec st_mtim; /* time of last modification */
 Header header;
 struct stat st;
 struct dirent *entry;
+
+typedef struct
+{
+    uint8_t red;   // 1B
+    uint8_t green;  // 1B
+    uint8_t blue;    // 1B
+} Pixel;
+
+Pixel pixel;
 
 int afiseaza_tipul(const char *nume_fisier)
 {
@@ -171,24 +183,6 @@ void countLines(char *array)
     printf("Numarul de linii in fisier este: %s\n", array);
 }
 
-/*int createFileinDir(char *name_file)
-{
-    char aux[MAX] = {0};
-    strcpy(aux, path_out);
-    printf("\n\nname = %s\n\n", name_file);
-    printf("\n\naux = %s\n\n", aux);
-    strcat(aux, name_file);
-    strcat(aux, "\0");
-    printf("\n\naux = %s\n\n", aux);
-    int fd = open(aux, O_WRONLY | O_CREAT, S_IRUSR | S_IRGRP | S_IROTH);
-    if (fd == -1)
-    {
-        perror("Fisierul nu exista\n");
-        return 0;
-    }
-    return fd;
-}?*/
-
 char *concatFormat(char *name_file)
 {
     char aux[MAX] = {0};
@@ -197,6 +191,92 @@ char *concatFormat(char *name_file)
     strcat(aux, "\0");
     char *aux2 = aux;
     return aux2;
+}
+
+int parcurgereToregex(char *array,char caracter)
+{
+    regex_t regex1;
+    regex_t regex2;
+    if (regcomp(&regex1, "^[A-Z][A-Za-z0-9\\, ]*\\.$" , REG_EXTENDED) != 0) 
+    {
+        perror("Eroare la compilarea expresiei regulate.\n");
+        return 0;
+    }
+    if (regcomp(&regex2, "si[ ]," , REG_EXTENDED) != 0) 
+    {
+        perror("Eroare la compilarea expresiei regulate.\n");
+        return 0;
+    }
+    int matching_propositions = 0;
+    char *p = strtok(array, "\n");
+    while(p)
+    {
+        if((regexec(&regex1, p, 0, NULL, 0) == 0) && (regexec(&regex2, p, 0, NULL, 0)) == 0 && (strchr(p, caracter) != NULL))
+        {
+                matching_propositions++;
+        }
+        p = strtok(NULL, "\n");
+    }
+    return matching_propositions;
+}
+
+void colorTOgri()
+{
+        int fd = open("img.bmp", O_RDONLY,O_WRONLY);
+    if (fd == -1)
+    {
+        perror("Fisierul nu exista\n");
+        return 0;
+    }
+    int nr = read(fd, buffer, MAX);
+    if (nr == -1)
+    {
+        perror("Eroare la citire\n"); 
+        return 0; 
+   }
+    memcpy(&header.width, buffer + 18, 4);
+    memcpy(&header.height, buffer + 22, 4);
+    memcpy(&pixel.red, buffer + 54, 1);
+    memcpy(&pixel.green, buffer + 55, 1);
+    memcpy(&pixel.blue, buffer + 56, 1);
+    uint8_t greyValue = (uint8_t)(0.299 * pixel.red + 0.587 * pixel.green + 0.114 * pixel.blue);
+    for(int i=0; i<header.height; i++)
+    {
+        for(int j=0; j<header.width; j++)
+        {
+            if(read(fd,&pixel.red,sizeof(pixel.red)) == -1)
+            {
+                perror("Eroare la citire\n");
+                return 0;
+            }
+            //Setarea cursorului în poziția corectă pentru scrierea pixelului în același loc
+            if(lseek(fd, -(sizeof(pixel.red)), SEEK_CUR) == -1)
+            {
+                perror("Eroare la lseek\n");
+                return 0;
+            }
+            pixel.red = greyValue;
+            printf("%d\n", pixel.red);
+            //Scrierea pixelului în același loc în fișierul original
+            if(write(fd, &pixel, sizeof(pixel.red)) == -1)
+            {
+                perror("Eroare la scriere\n");
+                return 0;
+            }
+            read(fd,&pixel.green,sizeof(pixel.green));
+            lseek(fd, -(sizeof(pixel.green)), SEEK_CUR);
+            pixel.green = greyValue;
+            printf("%d\n", pixel.green);
+            write(fd, &pixel, sizeof(pixel.green));
+            read(fd,&pixel.blue,sizeof(pixel.blue));
+            lseek(fd, -(sizeof(pixel.blue)), SEEK_CUR);
+            pixel.blue = greyValue;
+            printf("%d\n", pixel.blue);
+            write(fd, &pixel, sizeof(pixel.blue));
+        }
+    }
+    printf("height %d width %d\n", header.height, header.width);
+    close(fd);
 }
 
 void waitPID(int count_process)
@@ -278,7 +358,7 @@ int main(int args, char *argv[])
                 if (pid == -1)
                 {
                     perror("Eroare la fork\n");
-                    return 0;
+                    exit(1);
                 }
                 count_process++;
                 if (pid == 0)
@@ -306,6 +386,8 @@ int main(int args, char *argv[])
                     dup2(pfd[1], 1);
                     execlp("wc", "wc", "-l", aux , NULL);
                 }
+                else
+                {
                 // parinte
                 close(pfd[1]); // inchid capat de scriere
                 char array[MAX];
@@ -315,6 +397,7 @@ int main(int args, char *argv[])
                 sprintf(out,"Numărul de linii în fișier: %s\n", array);
                 write(file2, out, strlen(out));
                 close(pfd[0]);
+                }
             }
             else
             {
@@ -327,7 +410,7 @@ int main(int args, char *argv[])
                 if (pid == -1)
                 {
                     perror("Eroare la fork\n");
-                    return 0;
+                    exit(1);
                 }
                 count_process++;
                 if (pid == 0)
@@ -351,17 +434,43 @@ int main(int args, char *argv[])
                         extractDrepturi(st.st_mode, fd);
                     }
                     // Redirecționează ieșirea standard către pipe
+                    printf("                                        Auxiliarul este: %s\n", aux);
                     dup2(pfd[1], 1);
-                    execlp("wc", "wc", "-l", aux , NULL);
+                    execlp("cat", "cat", aux , NULL);
                 }
-                // parinte
-                close(pfd[1]); // inchid capat de scriere
-                char array[MAX] ={0};
-                read(pfd[0], array, MAX);
-                countLines(array);
-                sprintf(out,"Numărul de linii în fișier: %s\n", array);
-                write(file2, out, strlen(out));
-                close(pfd[0]);
+                    // parinte
+                    close(pfd[1]); // inchid capat de scriere
+                    char array[MAX] = {0};
+                    read(pfd[0], array, MAX);
+                    printf("                                            Arrayul este: %s\n sfarsitul arrayului \n", array);
+                    close(pfd[0]);
+                    pid_t pid2 = fork();
+                    if(pid2 == -1)
+                    {
+                        perror("Eroare la al 2-lea fork\n");
+                        return 0;
+                    }
+                    count_process++;
+                    if(pid2 == 0)
+                    {
+                        //copil 2
+                        close(pfd[0]); // inchid capat de citire
+                        dup2(pfd[1], 1);
+                        int contor_proposition = parcurgereToregex(array,argv[3][0]);
+                        printf("Numarul de propozitii corecte este: %d care contin caracterul: %c \n", contor_proposition, argv[3][0]);
+                        execlp("sh", "sh", "lab4+.sh", argv[3][0], NULL);
+                        exit(0);
+                    }
+                    else
+                    {
+                        //parinte 
+                        close(pfd[1]); // inchid capat de scriere
+                        char array[MAX] ={0};
+                        read(pfd[0], array, MAX);
+                        array[MAX-1] = '\0';
+                        printf("%s\n", array);
+                        close(pfd[0]);
+                    }
             }
         }
         else if (afiseaza_tipul(file_path) == 2)
@@ -424,7 +533,12 @@ int main(int args, char *argv[])
                     {
                         extractDrepturi(st.st_mode, fd);
                     }
+                    // Redirecționează ieșirea standard către pipe
+                    dup2(pfd[1], 1);
+                    execlp("wc", "wc", "-l", aux , NULL);
                 }
+                else
+                {
                 // parinte
                 close(pfd[1]); // inchid capat de scriere
                 char array[MAX] ={0};
@@ -433,6 +547,7 @@ int main(int args, char *argv[])
                 sprintf(out,"Numărul de linii în fișier: %s\n", array);
                 write(file2, out, strlen(out));
                 close(pfd[0]);
+                }
         }
         entry = readdir(dir);
     }
